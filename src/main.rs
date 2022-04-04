@@ -16,18 +16,11 @@ fn main() -> Result<()> {
             "Enter the FilePath, to write the time to as a argument {:#?}",
             env
         );
+        pause();
         return Ok(());
     }
-    let timezone;
-    #[cfg(target_family = "windows")]
-    {
-        timezone = windows::get_convert_utc_to_local()
-    };
-    #[cfg(not(target_family = "windows"))]
-    {
-        //todo: not implemented.
-        timezone = |x| x
-    };
+
+    let mut timezone = get_convert_utc_to_local();
     let filepath = unsafe { env.get_unchecked(1) };
     //Safety: Checked above
     println!(
@@ -42,7 +35,11 @@ It will be used for this program, to write the current system time to.
         .truncate(true)
         .create(true)
         .open(filepath)?;
+
+    #[cfg(debug_assertions)]
     let mut times = 0;
+
+    let mut hour = 0;
     loop {
         let time = std::time::SystemTime::now();
         let s = Instant::now();
@@ -53,6 +50,9 @@ It will be used for this program, to write the current system time to.
         let seconds = local.as_secs() % 60;
         let minutes = local.as_secs() / 60 % 60;
         let hours = local.as_secs() / 60 / 60 % 24;
+        if hour != hours {
+            timezone = get_convert_utc_to_local();
+        }
         let time = format!("{:02}:{:02}:{:02}", hours, minutes, seconds);
         let r = test.seek(SeekFrom::Start(0));
         if r.is_err() {
@@ -74,21 +74,23 @@ It will be used for this program, to write the current system time to.
                 );
             }
         }
-        times += 1;
         let dur_subsec_millis = local.subsec_millis();
+
         #[cfg(debug_assertions)]
-        if dur_subsec_millis as u128 + s.elapsed().as_millis() > 100 && times > 10 {
-            panic!(
-                "Something went wrong. We wrote {}ms after the second changed.",
-                dur_subsec_millis as u128 + s.elapsed().as_millis()
+        {
+            times += 1;
+            if dur_subsec_millis as u128 + s.elapsed().as_millis() > 100 && times > 10 {
+                panic!(
+                    "Something went wrong. We wrote {}ms after the second changed.",
+                    dur_subsec_millis as u128 + s.elapsed().as_millis()
+                );
+            }
+            println!(
+                "{}ms slow, processing & writing took {}ns",
+                dur_subsec_millis,
+                s.elapsed().as_nanos()
             );
         }
-        #[cfg(debug_assertions)]
-        println!(
-            "{}ms slow, processing & writing took {}ns",
-            dur_subsec_millis,
-            s.elapsed().as_nanos()
-        );
         sleep(
             Duration::from_millis(1000)
                 - Duration::from_millis(dur_subsec_millis as u64)
@@ -103,4 +105,15 @@ fn pause() {
     let mut str = "".to_string();
     clin.read_line(&mut str).unwrap();
     println!("Resuming.");
+}
+fn get_convert_utc_to_local() -> impl Fn(Duration) -> Duration {
+    #[cfg(target_family = "windows")]
+    {
+        windows::get_convert_utc_to_local()
+    }
+    #[cfg(not(target_family = "windows"))]
+    {
+        //todo: not implemented.
+        |x| x
+    }
 }
