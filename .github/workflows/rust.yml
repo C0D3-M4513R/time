@@ -1,0 +1,38 @@
+name: Rust Builds
+
+on:
+  push:
+    branches: [dev,main]
+    # Remove the line above to run when pushing to master
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        profile: [release] #--release -v,
+        target: [x86_64-pc-windows-msvc]
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+      - uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --profile ${{ matrix.profile }} --target ${{ matrix.target }}
+      - name: Save build
+        uses: actions/upload-artifact@v3
+        with:
+          name: time_${{ matrix.profile }}_${{ matrix.target }}.exe
+          path: target/${{ matrix.target }}/${{ matrix.profile }}/time.exe
+      - uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --profile ${{ matrix.profile }} --target ${{ matrix.target }}
