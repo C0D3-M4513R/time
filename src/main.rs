@@ -76,12 +76,14 @@ It will be used for this program, to write the current system time to.
         }
         times += 1;
         let dur_subsec_millis = local.subsec_millis();
+        #[cfg(debug_assertions)]
         if dur_subsec_millis as u128 + s.elapsed().as_millis() > 100 && times > 10 {
             panic!(
                 "Something went wrong. We wrote {}ms after the second changed.",
                 dur_subsec_millis as u128 + s.elapsed().as_millis()
             );
         }
+        #[cfg(debug_assertions)]
         println!(
             "{}ms slow, processing & writing took {}ns",
             dur_subsec_millis,
