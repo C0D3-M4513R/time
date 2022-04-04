@@ -39,7 +39,7 @@ It will be used for this program, to write the current system time to.
     #[cfg(debug_assertions)]
     let mut times = 0;
 
-    let mut hour = 0;
+    let mut min = 0;
     loop {
         let time = std::time::SystemTime::now();
         let s = Instant::now();
@@ -50,7 +50,8 @@ It will be used for this program, to write the current system time to.
         let seconds = local.as_secs() % 60;
         let minutes = local.as_secs() / 60 % 60;
         let hours = local.as_secs() / 60 / 60 % 24;
-        if hour != hours {
+        if min != minutes {
+            min = minutes;
             timezone = get_convert_utc_to_local();
         }
         let time = format!("{:02}:{:02}:{:02}", hours, minutes, seconds);
@@ -107,6 +108,8 @@ fn pause() {
     println!("Resuming.");
 }
 fn get_convert_utc_to_local() -> impl Fn(Duration) -> Duration {
+    #[cfg(debug_assertions)]
+    println!("Checking Timezone");
     #[cfg(target_family = "windows")]
     {
         windows::get_convert_utc_to_local()
