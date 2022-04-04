@@ -1,4 +1,9 @@
 [package]
 name = "time"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
+publish = false
+
+[target.'cfg(target_family="windows")'.dependencies.winapi]
+version = "0.3"
+features = ["timezoneapi","impl-default","impl-debug","errhandlingapi"]

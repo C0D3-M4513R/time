@@ -1,11 +1,13 @@
-use std::arch::x86_64::_mm_pause;
+#[allow(unused_imports)]
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::os::windows::fs::FileExt;
-use std::thread::{sleep, yield_now};
+use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 type Result<T> = std::result::Result<T, std::io::Error>;
+#[cfg(target_family = "windows")]
+mod windows;
 
 fn main() -> Result<()> {
     let env: Vec<String> = std::env::args().collect();
@@ -16,6 +18,16 @@ fn main() -> Result<()> {
         );
         return Ok(());
     }
+    let timezone;
+    #[cfg(target_family = "windows")]
+    {
+        timezone = windows::get_convert_utc_to_local()
+    };
+    #[cfg(not(target_family = "windows"))]
+    {
+        //todo: not implemented.
+        timezone = |x| x
+    };
     let filepath = unsafe { env.get_unchecked(1) };
     //Safety: Checked above
     println!(
@@ -37,9 +49,10 @@ It will be used for this program, to write the current system time to.
         let dur = time
             .duration_since(std::time::UNIX_EPOCH)
             .expect("The clock was set to before 1970-01-01 00:00:00. Please set your clock.");
-        let seconds = dur.as_secs() % 60;
-        let minutes = dur.as_secs() / 60 % 60;
-        let hours = dur.as_secs() / 60 / 60 % 24;
+        let local = timezone(dur); //Convert to Local time, if possible.
+        let seconds = local.as_secs() % 60;
+        let minutes = local.as_secs() / 60 % 60;
+        let hours = local.as_secs() / 60 / 60 % 24;
         let time = format!("{:02}:{:02}:{:02}", hours, minutes, seconds);
         let r = test.seek(SeekFrom::Start(0));
         if r.is_err() {
@@ -62,19 +75,23 @@ It will be used for this program, to write the current system time to.
             }
         }
         times += 1;
-        let dur_no_sec = dur - Duration::from_secs(dur.as_secs());
-        if (dur_no_sec + s.elapsed()).as_millis() > 100 && times > 10 {
+        let dur_subsec_millis = local.subsec_millis();
+        if dur_subsec_millis as u128 + s.elapsed().as_millis() > 100 && times > 10 {
             panic!(
                 "Something went wrong. We wrote {}ms after the second changed.",
-                (dur_no_sec + s.elapsed()).as_millis()
+                dur_subsec_millis as u128 + s.elapsed().as_millis()
             );
         }
         println!(
             "{}ms slow, processing & writing took {}ns",
-            dur_no_sec.as_millis(),
+            dur_subsec_millis,
             s.elapsed().as_nanos()
         );
-        sleep(Duration::from_millis(1000) - dur_no_sec - s.elapsed());
+        sleep(
+            Duration::from_millis(1000)
+                - Duration::from_millis(dur_subsec_millis as u64)
+                - s.elapsed(),
+        );
     }
 }
 
