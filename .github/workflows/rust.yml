@@ -30,8 +30,8 @@ jobs:
       - name: Save build
         uses: actions/upload-artifact@v3
         with:
-          name: time_${{ matrix.profile }}_${{ matrix.target }}.exe
-          path: target/${{ matrix.target }}/${{ matrix.profile }}/time.exe
+          name: time*_${{ matrix.profile }}_${{ matrix.target }}.exe
+          path: target/${{ matrix.target }}/${{ matrix.profile }}/time*.exe
       - uses: actions-rs/cargo@v1
         with:
           command: test
