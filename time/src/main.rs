@@ -1,7 +1,6 @@
 #[allow(unused_imports)]
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
-use std::os::windows::fs::FileExt;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -55,24 +54,15 @@ It will be used for this program, to write the current system time to.
             timezone = get_convert_utc_to_local();
         }
         let time = format!("{:02}:{:02}:{:02}", hours, minutes, seconds);
-        let r = test.seek(SeekFrom::Start(0));
-        if r.is_err() {
-            let r1 = test.seek_write(time.as_bytes(), 0);
-            if r.is_err() {
-                eprintln!(
-                    "Could not seek, or seek and write.\n\
-				Error for seek is {}. Error for seek and write is {}.",
-                    r.unwrap_err(),
-                    r1.unwrap_err()
-                );
-            }
-        } else {
-            let r = test.write_all(time.as_bytes());
-            if r.is_err() {
-                eprintln!(
-                    "Could not write to file. File write returned {}",
-                    r.unwrap_err()
-                );
+        match test.seek(SeekFrom::Start(0)) {
+            Ok(_) => match test.write_all(time.as_bytes()){
+                Ok(_) => {}
+                Err(err) => {
+                    eprintln!("Could not write to file. File write returned {err}");
+                }
+            },
+            Err(err) => {
+                eprintln!("Could not seek in file: {err}");
             }
         }
         let dur_subsec_millis = local.subsec_millis();
