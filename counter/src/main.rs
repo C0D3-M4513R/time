@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![windows_subsystem = "windows"]
 mod app;
 mod counter_or_timer;
 
