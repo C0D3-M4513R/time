@@ -8,6 +8,7 @@ use egui::ahash::HashMap;
 use egui_extras::Column;
 use serde::{Deserialize, Serialize};
 use crate::counter_or_timer::CounterTimer;
+use crate::get_runtime;
 
 #[derive(Default, Deserialize, Serialize)]
 pub(crate) struct App{
@@ -36,7 +37,7 @@ impl App {
 
         // Load previous app state (if any).
         // Note that you must enable the `persistence` feature for this to work.
-        let slf;
+        let mut slf;
         if let Some(Some(state)) = cc.storage.map(|storage|storage.get_string(eframe::APP_KEY)) {
             slf = serde_json::from_str(state.as_str()).unwrap_or_else(|err| {
                 let slf = Self::default();
@@ -53,6 +54,11 @@ impl App {
             log::info!("Either no storage source or no stored app state");
             slf = Self::default();
         }
+
+        for counter in slf.counters.values_mut(){
+            counter.popup = slf.other_app_state.popup.clone();
+        }
+
         slf
     }
 
@@ -67,10 +73,32 @@ impl App {
             }
         }
     }
+
+    fn display_popups(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame){
+        let old_popup = core::mem::take(
+            //Speed: there should never be a long lock on the popups. (only to push basically)
+            &mut *get_runtime().block_on(
+                self.other_app_state.popup.lock()
+            )
+        );
+        //we intentionally release the lock here. otherwise self would partly be borrowed, which will disallow the popup closure call
+        let mut new_popup = old_popup.into_iter().filter_map(|mut popup|{
+            if popup(self, ctx, frame) {
+                Some(popup)
+            }else{
+                None
+            }
+        }).collect();
+        //Speed: there should never be a long lock on the popups. (only to push basically)
+        let mut lock = get_runtime().block_on(self.other_app_state.popup.lock());
+        core::mem::swap(&mut *lock, &mut new_popup);
+        lock.append(&mut new_popup);
+        drop(lock);
+    }
 }
 
 impl eframe::App for App{
-    fn update(&mut self, ctx: &Context, _: &mut Frame) {
+    fn update(&mut self, ctx: &Context, frame: &mut Frame) {
         ctx.request_repaint_after(crate::PERIOD);
         let default_fn= |name|{
             CounterTimer::new(name, self.other_app_state.popup.clone())
@@ -106,7 +134,7 @@ impl eframe::App for App{
                 })
                 .body(|body|{
                     body.rows(
-                        80.,
+                        65.,
                         self.names.len(),
                         |mut row|{
                             if let Some(name) = self.names.get_mut(row.index()){
@@ -129,7 +157,9 @@ impl eframe::App for App{
                     )
                 })
         });
+        self.display_popups(ctx, frame)
     }
+
     fn save(&mut self, storage: &mut dyn Storage) {
         self.save_custom(storage)
     }

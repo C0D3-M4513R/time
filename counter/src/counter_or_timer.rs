@@ -2,9 +2,11 @@ use std::fmt::{Display, Formatter};
 use std::io::SeekFrom;
 use std::ops::Add;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
+use chrono::Timelike;
 use egui::{Response, Ui, Widget};
 use rfd::FileHandle;
 use serde::{Deserialize, Serialize};
@@ -15,16 +17,23 @@ use crate::app::popup;
 use crate::app::popup::{handle_display_popup_arc, popup_creator};
 use crate::get_runtime;
 
-fn duration_to_timestamp(dur:Duration) -> (u32, u64, u64, u64){
-    let mut s = dur.as_secs();
-    let mut m = s/60;
-    s %= 60;
-    let h = m/60;
-    m %= 60;
-    (dur.subsec_nanos(), s, m, h)
+const NOTIFICATION_TIMEOUT:u64 = 30;
+
+const SECONDS_IN_MINUTE: u64 = 60;
+const MINUTES_IN_HOUR: u64 = 60;
+const HOURS_IN_DAY: u64 = 24;
+const SECONDS_IN_DAY: u64 = SECONDS_IN_MINUTE * MINUTES_IN_HOUR * HOURS_IN_DAY;
+fn sec_to_timestamp(sec: i64) -> (u64, u64, u64, bool){
+    let neg = sec.is_negative();
+    let sec = sec.unsigned_abs();
+    let s = sec%SECONDS_IN_MINUTE;
+    let m = sec/SECONDS_IN_MINUTE;
+    let h = m/MINUTES_IN_HOUR;
+    let m  = m%MINUTES_IN_HOUR;
+    (s, m, h, neg)
 }
 
-const MODES:&[Mode] = &[Mode::Counter, Mode::Timer];
+const MODES:&[Mode] = &[Mode::Counter, Mode::Timer, Mode::SystemTime];
 
 #[derive(Copy, Clone, Debug, Default, Deserialize, Serialize, Ord, PartialOrd, Eq, PartialEq, Hash)]
 pub enum Mode {
@@ -33,13 +42,57 @@ pub enum Mode {
     Counter,
     //Counts Down
     Timer,
+    //Matches system time
+    SystemTime,
+}
+
+impl Mode{
+    pub const fn get_desc(self) -> &'static str{
+        match self{
+            Self::Counter => "Time to Start Counting Up from:",
+            Self::Timer => "Time to Start Counting Down from:",
+            Self::SystemTime => "Time to add to Current Local Time:",
+        }
+    }
+    pub fn get_timestamp(self, s: &Arc<AtomicI64>, mut start_sec: i64, overall_change: Duration) -> (u64, u64, u64, bool, bool){
+        match self{
+            Self::Timer =>  {
+                let dur = start_sec.checked_sub_unsigned(overall_change.as_secs());
+                let maxed = dur.is_none();
+                let dur = dur.unwrap_or(i64::MIN);
+                s.store(dur, Ordering::Release);
+                let (s, m, h, neg) = sec_to_timestamp(dur);
+                (s, m, h, neg, maxed)
+            },
+            Self::Counter => {
+                let dur = start_sec.checked_add_unsigned(overall_change.as_secs());
+                let maxed = dur.is_none();
+                let dur = dur.unwrap_or(i64::MAX);
+                s.store(dur, Ordering::Release);
+                let (s, m, h, neg) = sec_to_timestamp(dur);
+                (s, m, h, neg, maxed)
+            },
+            Self::SystemTime => {
+                start_sec = start_sec % SECONDS_IN_DAY as i64;
+                debug_assert!(chrono::TimeDelta::try_seconds(SECONDS_IN_DAY as i64).is_some());
+                let timedelta = chrono::TimeDelta::try_seconds(start_sec).unwrap_or_else(||{
+                    log::error!("How did we get here? Apparently {SECONDS_IN_DAY}*1000>{0} or -{SECONDS_IN_DAY}*1000 > -{0}", i64::MAX);
+                    chrono::TimeDelta::nanoseconds(0)
+                });
+                let time = chrono::Local::now().time().overflowing_add_signed(timedelta).0;
+                (u64::from(time.second()), u64::from(time.minute()), u64::from(time.hour()), false, false)
+            },
+        }
+    }
+
 }
 
 impl Display for Mode{
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Mode::Counter => write!(f, "Counter (Up)"),
-            Mode::Timer => write!(f, "Timer (Down)"),
+            Self::Counter => write!(f, "Counter (Up)"),
+            Self::Timer => write!(f, "Timer (Down)"),
+            Self::SystemTime => write!(f, "SystemTime"),
         }
     }
 }
@@ -49,16 +102,14 @@ pub struct CounterTimer {
     pub name: Arc<str>,
     mode: Mode,
     file: PathBuf,
-    time_s: Arc<AtomicU64>,
+    time_s: Arc<AtomicI64>,
     #[serde(skip)]
     file_pick: Option<JoinHandle<Option<FileHandle>>>,
     #[serde(skip)]
     counter: Option<(tokio::sync::oneshot::Sender<()>, JoinHandle<()>)>,
     #[serde(skip)]
-    popup: crate::app::popup::ArcPopupStore
+    pub(crate) popup: crate::app::popup::ArcPopupStore
 }
-
-
 
 impl CounterTimer {
     pub(crate) fn new(name: Arc<str>, popup: crate::app::popup::ArcPopupStore) -> Self {
@@ -66,7 +117,7 @@ impl CounterTimer {
             name,
             mode: Mode::default(),
             file: Default::default(),
-            time_s: Arc::new(AtomicU64::new(0)),
+            time_s: Arc::new(AtomicI64::new(0)),
             file_pick: None,
             counter: None,
             popup,
@@ -141,10 +192,11 @@ impl CounterTimer {
         let mode = self.mode;
         let file = self.file.clone();
         let s = self.time_s.clone();
-        let start_dur = Duration::new(self.time_s.load(Ordering::Acquire), 0);
+        let start_s = self.time_s.load(Ordering::Acquire);
         let popups = self.popup.clone();
         let (send, mut recv) = tokio::sync::oneshot::channel();
         let thread = tokio::spawn(async move {
+            let mut last_message = None;
             let mut file = tokio::fs::OpenOptions::new()
                 .write(true)
                 .truncate(true)
@@ -172,37 +224,42 @@ impl CounterTimer {
                     }
                     test = interval.tick() => {
                         let overall_change = test - start_instant;
-                        let dur = match mode {
-                            Mode::Timer => if overall_change > start_dur {
-                                break
-                            }else{
-                                start_dur - overall_change
-                            },
-                            Mode::Counter => start_dur + overall_change
-                        };
-                        s.store(dur.as_secs(), Ordering::Release);
-                        let (_ns, s, m, h) = duration_to_timestamp(dur);
+                        let (s, m, h, neg, maxed) = mode.get_timestamp(&s, start_s, overall_change);
                         if let Some(file) = file.as_mut() {
                             if let Err(err) = file.seek(SeekFrom::Start(0)).await {
-                                log::error!("Error moving Cursor: {err}");
-                                crate::app::popup::handle_display_popup_arc(
-                                    &popups,
-                                    "Could not make next write overwrite file",
-                                    &err,
-                                    "Error Seeking"
-                                );
-                                continue;
+                                if last_message.map_or(true, |insant: Instant|insant.elapsed().as_secs() > NOTIFICATION_TIMEOUT){
+                                    last_message = Some(Instant::now());
+                                    log::error!("Error moving Cursor: {err}");
+                                    crate::app::popup::handle_display_popup_arc(
+                                        &popups,
+                                        "Could not make next write overwrite file",
+                                        &err,
+                                        "Error Seeking"
+                                    );
+                                }
+                            }else{
+                                if let Err(err) = file.write_all(format!("{0}{h:02}:{m:02}:{s:02}", if neg {"-"} else {""}).as_bytes()).await {
+                                    if last_message.map_or(true, |insant: Instant|insant.elapsed().as_secs() > NOTIFICATION_TIMEOUT){
+                                        last_message = Some(Instant::now());
+                                        log::error!("Error writing to File: {err}");
+                                        crate::app::popup::handle_display_popup_arc(
+                                            &popups,
+                                            "Could not write to file",
+                                            &err,
+                                            "Error Writing"
+                                        );
+                                    }
+                                }
                             }
-                            if let Err(err) = file.write_all(format!("{h:02}:{m:02}:{s:02}").as_bytes()).await {
-                                log::error!("Error writing to File: {err}");
-                                crate::app::popup::handle_display_popup_arc(
-                                    &popups,
-                                    "Could not write to file",
-                                    &err,
-                                    "Error Writing"
-                                );
-                                continue;
-                            }
+                        }
+                        if maxed {
+                            handle_display_popup_arc(
+                                &popups,
+                                "A Timer has reached it's limits due to limitations of Computers",
+                                &"The Numeric Representation of the Timer in Seconds would overflow a signed 64-bit integer.",
+                                "Reached timer limit",
+                            );
+                            break;
                         }
                     }
                 }
@@ -228,33 +285,53 @@ impl Widget for &mut CounterTimer{
                 }
             });
 
-            if self.counter.is_none(){
-                if ui.button(format!("Start {}", self.mode)).clicked(){
-                    self.start_counter();
+            ui.horizontal(|ui | {
+                if self.counter.is_none() {
+                    if ui.button(format!("Start {}", self.mode)).clicked() {
+                        self.start_counter();
+                    }
+                } else {
+                    if ui.button(format!("Stop {}", self.mode)).clicked() {
+                        self.stop_counter();
+                    }
                 }
-            }else{
-                if ui.button(format!("Stop {}", self.mode)).clicked(){
-                    self.stop_counter();
-                }
-            }
+                ui.add_enabled_ui(self.counter.is_none(), |ui| {
+                    egui::ComboBox::new(self.name.as_ref(), "")
+                        .selected_text(self.mode.to_string())
+                        .show_ui(
+                            ui,
+                            |ui| for mode in MODES {
+                                ui.selectable_value(&mut self.mode, *mode, mode.to_string());
+                            }
+                        );
+                });
+            });
 
             ui.add_enabled_ui(self.counter.is_none(), |ui|{
-                egui::ComboBox::new(self.name.as_ref(), "")
-                    .selected_text(self.mode.to_string())
-                    .show_ui(
-                        ui,
-                        |ui|for mode in MODES{
-                            ui.selectable_value(&mut self.mode, *mode, mode.to_string());
-                        }
-                    );
                 ui.horizontal(|ui|{
-                    let (_, mut s, mut m, mut h) = duration_to_timestamp(Duration::new(self.time_s.load(Ordering::Acquire), 0));
-                    egui::DragValue::new(&mut h).custom_formatter(|n,_|format!("{n:02.0}")).ui(ui);
-                    ui.label(":");
-                    egui::DragValue::new(&mut m).custom_formatter(|n,_|format!("{n:02.0}")).ui(ui);
-                    ui.label(":");
-                    egui::DragValue::new(&mut s).custom_formatter(|n,_|format!("{n:02.0}")).ui(ui);
-                    self.time_s.store(s+(m+h*60)*60, Ordering::Release);
+                    ui.label(self.mode.get_desc());
+                    let mut s = self.time_s.load(Ordering::Acquire);
+                    egui::DragValue::new(&mut s)
+                        .custom_formatter(|mut sec,_|{
+                            let neg = sec.is_sign_negative();
+                            if neg {
+                                sec = -sec;
+                            }
+                            let s = sec%SECONDS_IN_MINUTE as f64;
+                            let min = sec/SECONDS_IN_MINUTE as f64;
+                            let hr = min/MINUTES_IN_HOUR as f64;
+                            let min  = min %MINUTES_IN_HOUR as f64;
+                            format!("{0}{hr:02.0}:{min:02.0}:{s:02.0}", if neg {"-"} else {""})
+                        }).custom_parser(|string|{
+                            let vec = string.split(":").take(3).collect::<Vec<_>>();
+                            let h = i64::from_str(vec.get(0)?).ok()?;
+                            let h = if h.is_negative() { -h as f64} else { h as f64};
+                            let m = u8::from_str(vec.get(1)?).ok()?;
+                            let s = u8::from_str(vec.get(2)?).ok()?;
+                            let s = (h*MINUTES_IN_HOUR as f64 + m as f64)*SECONDS_IN_MINUTE as f64 + s as f64;
+                            Some(s)
+                        }).ui(ui);
+                    self.time_s.store(s, Ordering::Release);
                 })
             })
         }).response
