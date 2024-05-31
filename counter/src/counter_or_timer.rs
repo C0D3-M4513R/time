@@ -323,13 +323,35 @@ impl Widget for &mut CounterTimer{
                             let min  = min %MINUTES_IN_HOUR as f64;
                             format!("{0}{hr:02.0}:{min:02.0}:{s:02.0}", if neg {"-"} else {""})
                         }).custom_parser(|string|{
-                            let vec = string.split(":").take(3).collect::<Vec<_>>();
-                            let h = i64::from_str(vec.get(0)?).ok()?;
-                            let h = if h.is_negative() { -h as f64} else { h as f64};
-                            let m = u8::from_str(vec.get(1)?).ok()?;
-                            let s = u8::from_str(vec.get(2)?).ok()?;
-                            let s = (h*MINUTES_IN_HOUR as f64 + m as f64)*SECONDS_IN_MINUTE as f64 + s as f64;
-                            Some(s)
+                            let neg = string.strip_prefix("-");
+                            let vec = neg.unwrap_or(string).rsplit(":").collect::<Vec<_>>();
+                            let mut seconds = 0.;
+                            let mut conversion = 1.;
+                            for (loops, string) in vec.iter().enumerate() {
+                                seconds += conversion * f64::from_str(string).unwrap_or(0.);
+                                if loops < 3 {
+                                    //Hours->Minutes && Minutes->Seconds
+                                    conversion *= 60.;
+                                } else if loops == 4 {
+                                    //Days->Hours
+                                    conversion *= 24.;
+                                } else if loops == 4 {
+                                    //Months->Days
+                                    //365.2425 is the average Year length in Days of the Gregorian calendar
+                                    conversion *= 365.2425/12.;
+                                } else if loops == 5 {
+                                    //Year->Months
+                                    //365.2425 is the average Year length in Days of the Gregorian calendar
+                                    conversion *= 12.;
+                                } else {
+                                    //I don't care beyond this point. tbh everything past days is already extra
+                                    conversion *= 1000.;
+                                }
+                            }
+                            if neg.is_some() {
+                                seconds = -seconds;
+                            }
+                            Some(seconds)
                         }).ui(ui);
                     self.time_s.store(s, Ordering::Release);
                 })
