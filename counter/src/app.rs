@@ -1,14 +1,20 @@
 pub(crate) mod popup;
 
+use std::ops::{Index, IndexMut};
 use std::sync::Arc;
 use std::time::Duration;
 use eframe::{Frame, Storage};
-use egui::{Context, Widget};
+use eframe::emath::Align;
+use egui::{Context, Layout, Widget};
 use egui::ahash::HashMap;
 use egui_extras::Column;
 use serde::{Deserialize, Serialize};
+use tokio::time::Instant;
 use crate::counter_or_timer::CounterTimer;
 use crate::get_runtime;
+
+const LINK_LATEST:&str = "https://github.com/C0D3-M4513R/time/releases/latest";
+const CURRENT_VERSION:&str = "-\tCurrent Version: v0.2.1";
 
 #[derive(Default, Deserialize, Serialize)]
 pub(crate) struct App{
@@ -18,16 +24,10 @@ pub(crate) struct App{
     #[serde(skip)]
     other_app_state: OtherAppState,
 }
+#[derive(Default)]
 struct OtherAppState{
-    popup: popup::ArcPopupStore
-}
-
-impl Default for OtherAppState {
-    fn default() -> Self {
-        Self {
-            popup: Arc::new(Default::default()),
-        }
-    }
+    popup: popup::ArcPopupStore,
+    text_err: Option<(&'static str, Instant)>,
 }
 
 impl App {
@@ -105,11 +105,23 @@ impl eframe::App for App{
         };
         egui::CentralPanel::default().show(ctx, |ui|{
             ui.horizontal(|ui|{
-                ui.text_edit_singleline(&mut self.next_name);
+                let text_resp = ui.text_edit_singleline(&mut self.next_name);
                 if ui.button("Add new Counter").clicked(){
                     let name:Arc<str> = Arc::from(core::mem::take(&mut self.next_name));
-                    self.names.push(name.clone());
-                    self.counters.insert(name.clone(), default_fn(name));
+                    if !self.names.contains(&name) {
+                        self.other_app_state.text_err = None;
+                        self.names.push(name.clone());
+                        self.counters.insert(name.clone(), default_fn(name));
+                    }else{
+                        self.other_app_state.text_err = Some(("This name is already taken. Please provide a uniqe name.", Instant::now()));
+                    }
+                }
+                if let Some((err_text, time)) = self.other_app_state.text_err {
+                    text_resp.ctx.debug_painter()
+                        .error(text_resp.rect.left_bottom(), err_text);
+                    if time.elapsed().as_secs() > crate::NOTIFICATION_TIMEOUT {
+                        self.other_app_state.text_err = None;
+                    }
                 }
                 if ui.button("Start Everything").clicked(){
                     for i in self.counters.values_mut(){
@@ -122,40 +134,64 @@ impl eframe::App for App{
                     }
                 }
             });
-            egui_extras::TableBuilder::new(ui)
-                .resizable(true)
-                .striped(true)
-                .column(Column::initial(100.))
-                .column(Column::remainder())
-                .header(25., |mut row|{
-                    for i in ["Name", "Counter Ui"]{
-                        row.col(|ui|{ ui.label(i); });
-                    }
-                })
-                .body(|body|{
-                    body.rows(
-                        65.,
-                        self.names.len(),
-                        |mut row|{
-                            if let Some(name) = self.names.get_mut(row.index()){
-                                row.col(|ui|{
-                                    let mut new_name:String = name.as_ref().into();
-                                    if ui.text_edit_singleline(&mut new_name).changed() {
-                                        let mut counter = self.counters.remove(&*name).unwrap_or_else(||default_fn(name.clone()));
-                                        let new_name:Arc<str> = Arc::from(new_name);
-                                        counter.name = new_name.clone();
-                                        self.counters.insert(new_name.clone(), counter);
-                                        *name = new_name;
-                                    }
-                                });
-                                row.col(|ui|{ self.counters.entry(name.clone()).or_insert_with(||default_fn(name.clone())).ui(ui); });
-                            }else{
-                                row.col(|ui|{ ui.label("Error: Overread"); });
-                                row.col(|ui|{ ui.label("Error: Overread"); });
+            ui.with_layout(Layout::bottom_up(Align::Min), |ui|{
+                ui.horizontal(|ui|{
+                    ui.hyperlink_to("The releases and the Source Code can be found on Github.", LINK_LATEST);
+                    ui.label(CURRENT_VERSION);
+                });
+                ui.with_layout(Layout::default(), |ui|{
+                    egui_extras::TableBuilder::new(ui)
+                        .resizable(true)
+                        .striped(true)
+                        .column(Column::initial(100.))
+                        .column(Column::remainder())
+                        .header(25., |mut row|{
+                            for i in ["Name", "Counter Ui"]{
+                                row.col(|ui|{ ui.label(i); });
                             }
-                        }
-                    )
+                        })
+                        .body(|body|{
+                            body.rows(
+                                65.,
+                                self.names.len(),
+                                |mut row|{
+                                        let index = row.index();
+                                        let mut deleted = false;
+                                        if index < self.names.len() {
+                                            //all index ops should be valid here
+                                            row.col(|ui|{
+                                                let name = self.names.index_mut(index);
+                                                let mut new_name: String = name.as_ref().into();
+                                                if ui.text_edit_singleline(&mut new_name).changed() {
+                                                    let mut counter = self.counters.remove(&*name).unwrap_or_else(|| default_fn(name.clone()));
+                                                    let new_name: Arc<str> = Arc::from(new_name);
+                                                    counter.name = new_name.clone();
+                                                    self.counters.insert(new_name.clone(), counter);
+                                                    *name = new_name;
+                                                }
+                                                if ui.button("Delete").clicked(){
+                                                    deleted = true;
+                                                    self.counters.remove(&self.names.remove(index));
+                                                }
+                                            });
+                                            if !deleted {
+                                                row.col(|ui|{
+                                                    let name = self.names.index(index);
+                                                    self.counters.entry(name.clone()).or_insert_with(||default_fn(name.clone())).ui(ui);
+                                                });
+                                            } else {
+                                                ctx.request_repaint();
+                                            }
+                                    } else {
+                                        ctx.request_repaint();
+                                        row.col(|ui|{ ui.label("Error: Overread"); });
+                                        row.col(|ui|{ ui.label("Error: Overread"); });
+                                }
+                            }
+                        )
+                    });
                 })
+            });
         });
         self.display_popups(ctx, frame)
     }

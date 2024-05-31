@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::runtime::{Builder, Runtime};
 
-
+pub const NOTIFICATION_TIMEOUT:u64 = 30;
 pub const PERIOD:Duration = Duration::from_secs(1);
 
 

@@ -17,8 +17,6 @@ use crate::app::popup;
 use crate::app::popup::{handle_display_popup_arc, popup_creator};
 use crate::get_runtime;
 
-const NOTIFICATION_TIMEOUT:u64 = 30;
-
 const SECONDS_IN_MINUTE: u64 = 60;
 const MINUTES_IN_HOUR: u64 = 60;
 const HOURS_IN_DAY: u64 = 24;
@@ -227,7 +225,7 @@ impl CounterTimer {
                         let (s, m, h, neg, maxed) = mode.get_timestamp(&s, start_s, overall_change);
                         if let Some(file) = file.as_mut() {
                             if let Err(err) = file.seek(SeekFrom::Start(0)).await {
-                                if last_message.map_or(true, |insant: Instant|insant.elapsed().as_secs() > NOTIFICATION_TIMEOUT){
+                                if last_message.map_or(true, |insant: Instant|insant.elapsed().as_secs() > crate::NOTIFICATION_TIMEOUT){
                                     last_message = Some(Instant::now());
                                     log::error!("Error moving Cursor: {err}");
                                     crate::app::popup::handle_display_popup_arc(
@@ -239,7 +237,7 @@ impl CounterTimer {
                                 }
                             }else{
                                 if let Err(err) = file.write_all(format!("{0}{h:02}:{m:02}:{s:02}", if neg {"-"} else {""}).as_bytes()).await {
-                                    if last_message.map_or(true, |insant: Instant|insant.elapsed().as_secs() > NOTIFICATION_TIMEOUT){
+                                    if last_message.map_or(true, |insant: Instant|insant.elapsed().as_secs() > crate::NOTIFICATION_TIMEOUT){
                                         last_message = Some(Instant::now());
                                         log::error!("Error writing to File: {err}");
                                         crate::app::popup::handle_display_popup_arc(
