@@ -9,6 +9,9 @@ on:
     branches: [main]
 permissions:
   contents: write
+  id-token: write
+  attestations: write
+  actions: read
 
 jobs:
   create-release:
@@ -101,6 +104,26 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.4
       - name: Run build
         run: cargo build --target ${{ matrix.target }} --release --package ${{ matrix.package }} --bin ${{ matrix.package }}
+      - uses: anchore/sbom-action@v0
+        with:
+          artifact-name: "${{ matrix.package }}-${{ matrix.name }}-sbom.spdx.json"
+          output-file: "${{ matrix.package }}-${{ matrix.name }}-sbom.spdx.json"
+      - uses: actions/attest-sbom@v1
+        with:
+          subject-path: |
+            target/${{ matrix.target }}/release/${{ matrix.package }}
+            target/${{ matrix.target }}/release/${{ matrix.package }}.exe
+            !target/${{ matrix.target }}/release/deps
+            !target/${{ matrix.target }}/release/build
+            !target/${{ matrix.target }}/release/.fingerprint
+            !target/${{ matrix.target }}/release/examples
+            !target/${{ matrix.target }}/release/incremental
+            !target/${{ matrix.target }}/release/.cargo-lock
+            !target/${{ matrix.target }}/release/*.d
+            !target/${{ matrix.target }}/release/*.pdb
+          subject-name: "${{ matrix.package }}-${{ matrix.name }}"
+          sbom-path: "${{ matrix.package }}-${{ matrix.name }}-sbom.spdx.json"
+          push-to-registry: false
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
