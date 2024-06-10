@@ -9,12 +9,16 @@ on:
     branches: [main]
 permissions:
   contents: write
+  id-token: write
+  attestations: write
+  actions: read
 
 jobs:
   create-release:
     needs:
       - build
       - nixbuild
+      - create-sbom
     runs-on: ubuntu-latest
     if: github.ref_type == 'tag'
     steps:
@@ -37,6 +41,13 @@ jobs:
             done
             rm -r "${dir}"
           done
+          mv artifacts/sbom.spdx.json sbom.spdx.json
+      - uses: actions/attest-sbom@v1
+        with:
+          subject-path: artifacts/*
+          subject-name: "counter@${{ github.ref_name }}"
+          sbom-path: "sbom.spdx.json"
+          push-to-registry: false
       - name: release
         uses: ncipollo/release-action@v1
         id: create_release
@@ -53,6 +64,13 @@ jobs:
       - uses: DeterminateSystems/magic-nix-cache-action@v3
       - run: nix-build
       - run: nix-shell --run "echo OK"
+  create-sbom:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: anchore/sbom-action@v0
+        with:
+          artifact-name: "sbom.spdx.json"
+          output-file: "sbom.spdx.json"
   build:
     runs-on: ${{ matrix.os }}
     strategy:
