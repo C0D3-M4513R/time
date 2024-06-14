@@ -1,5 +1,5 @@
 [workspace]
-members = [ "counter","time","timer"]
+members = [ "counter"]
 resolver = "2"
 
 [profile.release]
