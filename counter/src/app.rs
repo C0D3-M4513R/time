@@ -14,7 +14,7 @@ use crate::counter_or_timer::CounterTimer;
 use crate::get_runtime;
 
 const LINK_LATEST:&str = "https://github.com/C0D3-M4513R/time/releases/latest";
-const CURRENT_VERSION:&str = "-\tCurrent Version: v0.2.1";
+const CURRENT_VERSION:&str = "-\tCurrent Version: v0.2.2";
 
 #[derive(Default, Deserialize, Serialize)]
 pub(crate) struct App{
