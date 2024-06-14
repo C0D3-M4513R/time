@@ -315,10 +315,10 @@ impl Widget for &mut CounterTimer{
                             if neg {
                                 sec = -sec;
                             }
-                            let s = sec%SECONDS_IN_MINUTE as f64;
-                            let min = sec/SECONDS_IN_MINUTE as f64;
-                            let hr = min/MINUTES_IN_HOUR as f64;
-                            let min  = min %MINUTES_IN_HOUR as f64;
+                            let s = sec.rem_euclid(SECONDS_IN_MINUTE as f64);
+                            let min = sec.div_euclid(SECONDS_IN_MINUTE as f64);
+                            let hr = min.div_euclid(MINUTES_IN_HOUR as f64);
+                            let min  = min.rem_euclid(MINUTES_IN_HOUR as f64);
                             format!("{0}{hr:02.0}:{min:02.0}:{s:02.0}", if neg {"-"} else {""})
                         }).custom_parser(|string|{
                             let neg = string.strip_prefix("-");
