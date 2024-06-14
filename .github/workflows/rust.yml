@@ -28,6 +28,8 @@ jobs:
           path: artifacts
       - name: Rename and move artifacts
         run: |
+          mv artifacts/sbom.spdx.json/sbom.spdx.json sbom.spdx.json
+          rm -r artifacts/sbom.spdx.json
           for dir in artifacts/*/
           do
             dir=${dir%*/} # remove the trailing "/"
@@ -41,7 +43,6 @@ jobs:
             done
             rm -r "${dir}"
           done
-          mv artifacts/sbom.spdx.json sbom.spdx.json
       - uses: actions/attest-sbom@v1
         with:
           subject-path: artifacts/*
@@ -67,6 +68,7 @@ jobs:
   create-sbom:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: anchore/sbom-action@v0
         with:
           artifact-name: "sbom.spdx.json"
